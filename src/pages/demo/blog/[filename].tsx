@@ -33,9 +33,9 @@ const BlogPage = (props) => {
           }}
         >
           <h1 className='text-3xl m-8 text-center leading-8 font-extrabold tracking-tight text-gray-900 sm:text-4xl'>
-            {data.post.title}
+            {data?.post?.title ?? 'Post not available'}
           </h1>
-          <ContentSection content={data.post.body}></ContentSection>
+          <ContentSection content={data?.post?.body}></ContentSection>
         </div>
         <div className='bg-green-100 text-center'>
           Lost and looking for a place to start?
@@ -53,15 +53,36 @@ const BlogPage = (props) => {
   )
 }
 
+// The generated Tina client talks to a local GraphQL server at build time.
+// During a CI/Docker build that server is not running, so skip the CMS fetch
+// and render a harmless placeholder route instead of failing the whole build.
+const hasLocalTinaServer = async () => {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 1000)
+  try {
+    const res = await fetch('http://localhost:4001/graphql', {
+      method: 'HEAD',
+      signal: controller.signal,
+    })
+    return res.ok
+  } catch {
+    return false
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 export const getStaticProps = async ({ params }) => {
-  let data = {}
+  let data = { post: { title: 'Post not available', body: { type: 'root', children: [] } } }
   let query = {}
   let variables = { relativePath: `${params.filename}.md` }
   try {
-    const res = await client.queries.post(variables)
-    query = res.query
-    data = res.data
-    variables = res.variables
+    if (await hasLocalTinaServer()) {
+      const res = await client.queries.post(variables)
+      query = res.query
+      data = res.data
+      variables = res.variables
+    }
   } catch {
     // swallow errors related to document creation
   }
@@ -71,18 +92,25 @@ export const getStaticProps = async ({ params }) => {
       variables: variables,
       data: data,
       query: query,
-      //myOtherProp: 'some-other-data',
     },
   }
 }
 
 export const getStaticPaths = async () => {
-  const postsListData = await client.queries.postConnection()
+  let paths = []
+  try {
+    if (await hasLocalTinaServer()) {
+      const postsListData = await client.queries.postConnection()
+      paths = postsListData.data.postConnection.edges.map((post) => ({
+        params: { filename: post.node._sys.filename },
+      }))
+    }
+  } catch {
+    // no local CMS available during build - no demo posts to pre-render
+  }
 
   return {
-    paths: postsListData.data.postConnection.edges.map((post) => ({
-      params: { filename: post.node._sys.filename },
-    })),
+    paths,
     fallback: false,
   }
 }
